@@ -182,7 +182,6 @@ int U_Utf8ToUtf32le(const char* in,int in_len,uint32_t** out){ size_t L=0; retur
 int U_Utf16leToUtf32le(const uint16_t* in,int in_len,uint32_t** out){ size_t L=0; return utf16le_to_utf32le_core(in,(size_t)in_len,out,&L); }
 int U_Utf32leToUtf8(const uint32_t* in,int in_len,char** out){ size_t L=0; return utf32le_to_utf8_core(in,(size_t)in_len,out,&L); }
 size_t wchar16len(const uint16_t* s){ size_t i=0; if(!s) return 0; while(s[i]!=0) i++; return i; }
-int get_real_color_icount(int a,int b,int c,int d){ (void)a;(void)b;(void)c;(void)d; return 0; }
 C
 
 # 2c) link-time stubs for optional/host-only pieces
@@ -199,76 +198,94 @@ cat > /work/shims/lib_stubs.c <<'C'
 /* libemf2svg_print expects a FUNCTION named U_emr_names(int) */
 WEAK const char* U_emr_names(int code) { (void)code; return ""; }
 
-/* These may or may not be provided by other units; keep them WEAK to avoid dups */
+/* Matches callers in emf2svg_rec_bitmap.c (9 params, returns int) */
 WEAK int DIB_to_RGBA(const unsigned char* dib, int dib_size,
-                     unsigned char** out_rgba, int* w, int* h) {
-  (void)dib; (void)dib_size; if (out_rgba) *out_rgba = NULL;
-  if (w) *w = 0; if (h) *h = 0;
+                     unsigned char** out_rgba, int* w, int* h,
+                     int p6, int p7, int p8, int p9) {
+  (void)dib; (void)dib_size; (void)p6; (void)p7; (void)p8; (void)p9;
+  if (out_rgba) *out_rgba = NULL;
+  if (w) *w = 0;
+  if (h) *h = 0;
   return 0;
 }
 
-WEAK int get_real_color_count(const unsigned char* rgba, int w, int h) {
-  (void)rgba; (void)w; (void)h; return 0;
+/* Matches callers in emf2svg_rec_bitmap.c (6 params, returns int) */
+WEAK int image_library_writer(void* ctx,
+                              const unsigned char* data, int len,
+                              int p4, int p5, int p6) {
+  (void)ctx; (void)data; (void)len; (void)p4; (void)p5; (void)p6;
+  return 0;
 }
 
+/* PMF helpers used by comment module (6 params, return int) */
+WEAK int U_pmf_onerec_draw(const unsigned char* p, int len,
+                           char** svg, size_t* svg_len,
+                           int p5, int p6) {
+  (void)p; (void)len; (void)svg; (void)svg_len; (void)p5; (void)p6;
+  return 0;
+}
+WEAK int U_pmf_onerec_print(const unsigned char* p, int len,
+                            char** out, size_t* out_len,
+                            int p5, int p6) {
+  (void)p; (void)len; (void)out; (void)out_len; (void)p5; (void)p6;
+  return 0;
+}
+
+/* Matches caller in emf2svg_img_utils.c (1 param) */
+WEAK int get_real_color_count(const unsigned char* rgba) {
+  (void)rgba;
+  return 0;
+}
+
+/* optional no-op */
 WEAK void freeEmfImageLibrary(void* p) { (void)p; }
-WEAK void image_library_writer(void* ctx, const unsigned char* data, int len) {
-  (void)ctx; (void)data; (void)len;
-}
-
-/* PMF helpers used by comment module in some builds */
-WEAK int U_pmf_onerec_draw(const unsigned char* p, int len, char** svg, size_t* svg_len) {
-  (void)p; (void)len; (void)svg; (void)svg_len; return 0;
-}
-WEAK int U_pmf_onerec_print(const unsigned char* p, int len, char** out, size_t* out_len) {
-  (void)p; (void)len; (void)out; (void)out_len; return 0;
-}
 C
 
 # 2d) minimal wrapper exporting `convert` (C API expected by JS)
-cat > /work/wrapper_emf.cpp <<'CPP'
+cat > /work/wrapper_emf.c <<'C'
+// pure C wrapper
+#include <stdint.h>
 #include <stdlib.h>
-#include <string.h>
+#include <string.h>     // memset
 
-extern "C" {
-  typedef struct {
-    bool verbose;
-    bool emfplus;
-    const char* nameSpace;
-    bool svgDelimiter;
-    size_t imgWidth;
-    size_t imgHeight;
-  } generatorOptions;
+// The repo's public header is "emf2svg.h". With your -I flags (-Iinc -Isrc -Isrc/lib)
+// it resolves to inc/emf2svg.h provided by the project.
+#include "emf2svg.h"
 
-  // From libemf2svg
-  int emf2svg(const char* emf, size_t emf_len,
-              char** svg_out, size_t* svg_len,
-              generatorOptions* opt);
-}
+// JS cwrap signature:
+// int convert(const uint8_t* in, int len, int dpi, uint8_t** out, int* out_len);
+int convert(const uint8_t* in, int len, int dpi, uint8_t** out, int* out_len) {
+  (void)dpi; // currently unused by libemf2svg
 
-// Exported entry point
-extern "C" int convert(const unsigned char* in, int len, int dpi,
-                       char** out, int* out_len) {
-  (void)dpi;
-  generatorOptions opt = {};
-  opt.verbose = false;
-  opt.emfplus = false;
-  opt.nameSpace = "svg";
-  opt.svgDelimiter = true;
-  opt.imgWidth = 0;
-  opt.imgHeight = 0;
+  char*  svg = NULL;
+  size_t L   = 0;
 
-  char* svg = nullptr;
-  size_t L = 0;
-  int rc = emf2svg(reinterpret_cast<const char*>(in),
-                   static_cast<size_t>(len), &svg, &L, &opt);
-  if (rc != 0 || !svg) return rc != 0 ? rc : 99;
+  // API takes a mutable char*. Our input lives in WASM heap, so this is safe.
+  char* contents = (char*)in;
 
-  *out = svg;
-  *out_len = static_cast<int>(L);
+  // Build non-NULL options; many code paths dereference these.
+  generatorOptions opt;
+  memset(&opt, 0, sizeof(opt));
+
+  // These fields exist in libemf2svg's generatorOptions:
+  // verbose, emfplus, nameSpace, svgDelimiter, imgWidth, imgHeight
+  // (If your header differs, the compiler will tell youâ€”remove any unknown fields.)
+  opt.verbose      = 0;
+  opt.emfplus      = 0;
+  opt.nameSpace    = "svg";
+  opt.svgDelimiter = 1;
+  opt.imgWidth     = 0;
+  opt.imgHeight    = 0;
+
+  int rc = emf2svg(contents, (size_t)len, &svg, &L, &opt);
+  if (rc != 0 || !svg || L == 0) return rc != 0 ? rc : 99;
+
+  *out     = (uint8_t*)svg;  // lib uses malloc; caller frees
+  *out_len = (int)L;
   return 0;
 }
-CPP
+C
+
 
 # 2e) CLI shim (_main) â€“ consumed by JS CLI path
 cat > /work/cli_main.c <<'C'
@@ -359,9 +376,13 @@ ALL_TXT=/work/allfiles.list
 {
   echo /work/shims/utf_shim.c
   echo /work/shims/lib_stubs.c
-  echo /work/wrapper_emf.cpp
+  echo /work/wrapper_emf.c
   cat "$FILES_TXT"
 } > "$ALL_TXT"
+
+echo "---- allfiles.list ----"
+cat /work/allfiles.list
+echo "------------------------"
 
 # 4) Trigger emscripten ports fetch with a trivial compile
 echo 'int __dummy(void){return 0;}' >/tmp/empty.c
@@ -386,15 +407,17 @@ if [ "$CNT" -lt 3 ]; then
 fi
 
 # 5) Compile + link to /out using xargs
-xargs -a /work/allfiles.list emcc -O3 \
+xargs -a /work/allfiles.list emcc -O0 -g2 \
   -s MODULARIZE=1 -s EXPORT_ES6=1 \
   -s ALLOW_MEMORY_GROWTH=1 -s EXIT_RUNTIME=1 \
   -s FORCE_FILESYSTEM=1 -s ENVIRONMENT=node \
-  -s 'EXPORTED_FUNCTIONS=["_main","_malloc","_free"]' \
-  -s 'EXPORTED_RUNTIME_METHODS=["getValue","setValue","FS","HEAPU8","HEAP8","cwrap"]' \
-  -sSTACK_SIZE=2MB -sINITIAL_MEMORY=128MB \
+  -s 'EXPORTED_FUNCTIONS=["_main","_malloc","_free","_convert"]' \
+  -s 'EXPORTED_RUNTIME_METHODS=["getValue","setValue","FS","HEAPU8","HEAP8","HEAP32","cwrap","ccall"]' \
+  -sSTACK_SIZE=2MB -sINITIAL_MEMORY=256MB \
   -sUSE_ZLIB=1 -sUSE_FREETYPE=1 -sUSE_LIBPNG=1 \
-  -Iinc -Isrc -I/work/shims -I/work/shims/fontconfig \
+  -s ASSERTIONS=2 \
+  -Wl,--fatal-warnings \
+  -I. -Iinc -Iinc/lib -Isrc -Isrc/lib -I/work/shims -I/work/shims/fontconfig \
   /work/cli_main.c \
   -o /out/emf2svg.js
 

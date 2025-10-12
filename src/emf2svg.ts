@@ -46,15 +46,17 @@ async function getModule(kind: VectorKind): Promise<EmscriptenModule> {
     throw new Error("WMF support isn’t built yet. Use EMF files for now.");
 
   if (!emfFactory) {
-    // IMPORTANT: keep the glue and .wasm under dist/<esm|cjs>/wasm/
     const glueUrl = new URL("./esm/wasm/emf2svg.js", import.meta.url).href;
     const glueMod = await import(glueUrl);
     const f = glueMod.default as (o: any) => Promise<EmscriptenModule>;
     emfFactory = (opts) =>
       f({
         ...opts,
-        // Make sure the glue can find the .wasm no matter where we call from
         locateFile: (p: string) => new URL(p, glueUrl).href,
+        noInitialRun: true, // ← belt-and-suspenders with INVOKE_RUN=0
+        arguments: [], // ← prevent the runtime from using process.argv
+        print: (...a: any[]) => console.log("[wasm out]", ...a),
+        printErr: (...a: any[]) => console.error("[wasm err]", ...a),
       });
   }
   return emfFactory({});
@@ -73,31 +75,30 @@ async function runDirectExport(
   data: Uint8Array,
   dpi: number
 ): Promise<string> {
-  const convertFn =
-    mod._convert ??
-    (mod.cwrap?.("convert", "number", [
-      "number",
-      "number",
-      "number",
-      "number",
-      "number",
-    ]) as
-      | ((
-          ptr: number,
-          len: number,
-          dpi: number,
-          outPtrPtr: number,
-          outLenPtr: number
-        ) => number)
-      | undefined);
+  const convertFn = mod.cwrap?.("convert", "number", [
+    "number",
+    "number",
+    "number",
+    "number",
+    "number",
+  ]) as
+    | ((
+        inPtr: number,
+        len: number,
+        dpi: number,
+        outPtrPtr: number,
+        outLenPtr: number
+      ) => number)
+    | undefined;
 
   if (!convertFn || !mod._malloc || !mod._free) {
     throw new Error("Direct convert API not exported");
   }
 
-  const inPtr = mod._malloc(data.length);
   const heap = getHeap(mod);
+  const inPtr = mod._malloc(data.length);
   heap.set(data, inPtr);
+
   const outPtrPtr = mod._malloc(4);
   const outLenPtr = mod._malloc(4);
 
@@ -108,16 +109,28 @@ async function runDirectExport(
     mod._free(outLenPtr);
     throw new Error(`convert returned ${rc}`);
   }
-  const outPtr = mod.getValue(outPtrPtr, "i32");
-  const outLen = mod.getValue(outLenPtr, "i32");
+
+  const outPtr = mod.getValue(outPtrPtr, "i32") >>> 0;
+  const outLen = mod.getValue(outLenPtr, "i32") >>> 0;
+
+  if (!outPtr || !outLen) {
+    mod._free(inPtr);
+    mod._free(outPtrPtr);
+    mod._free(outLenPtr);
+    throw new Error(
+      `convert produced empty result (ptr=${outPtr}, len=${outLen})`
+    );
+  }
 
   const svg = new TextDecoder("utf-8").decode(
     heap.slice(outPtr, outPtr + outLen)
   );
+
   mod._free(outPtr);
   mod._free(inPtr);
   mod._free(outPtrPtr);
   mod._free(outLenPtr);
+
   return svg;
 }
 /**
@@ -133,65 +146,92 @@ async function runCliMain(
   if (!mod.FS || !mod._main) {
     throw new Error("CLI mode not available (no FS/_main)");
   }
+
   const IN = kind === "emf" ? "/in.emf" : "/in.wmf";
   const OUT = "/out.svg";
 
-  // Reset FS state between runs if needed
-  try {
-    mod.FS.unlink(IN);
-  } catch {}
-  try {
-    mod.FS.unlink(OUT);
-  } catch {}
+  // Clean slate
+  for (const p of [IN, OUT]) {
+    try {
+      mod.FS.unlink(p);
+    } catch {}
+  }
   try {
     mod.FS.mkdir("/tmp");
   } catch {}
 
+  // Write input
   mod.FS.writeFile(IN, data);
 
-  // Try typical CLI args: <input> <output> --dpi <dpi>
+  // Sanity: check we can stat/read back exactly
+  try {
+    const st = mod.FS.stat(IN);
+    console.log(`[emf-to-png][cli] wrote ${IN} size=${st.size}`);
+    if (st.size !== data.length) {
+      throw new Error(
+        `[cli] size mismatch: stat(${st.size}) vs buffer(${data.length})`
+      );
+    }
+  } catch (e) {
+    console.error("[emf-to-png][cli] STAT FAILED", e);
+    console.error("[emf-to-png][cli] / listing:", mod.FS.readdir("/"));
+    throw e;
+  }
+
+  // Extra visibility
+  console.log("[emf-to-png][cli] root listing:", mod.FS.readdir("/"));
+
   const args = [IN, OUT, "--dpi", String(dpi)];
-  const exitCode = mod._main!(args.length + 1, toArgv(mod, ["tool", ...args]));
+  const argvPtr = toArgv(mod, ["tool", ...args]); // argv[0] is program name
+  const exitCode = mod._main!(args.length + 1, argvPtr);
+
+  console.log(`[emf-to-png][cli] _main exit=${exitCode}`);
   if (exitCode !== 0) {
     throw new Error(`CLI _main exited with code ${exitCode}`);
   }
+
   const svgBytes = mod.FS.readFile(OUT, { encoding: "binary" });
   return new TextDecoder("utf-8").decode(svgBytes);
 }
 
 function toArgv(mod: any, args: string[]) {
-  // Allocate argv in Emscripten heap
   const heap = getHeap(mod);
-  const argvPtrs: number[] = [];
-  const buf = (s: string) => {
-    const str = new TextEncoder().encode(s + "\0");
-    const ptr = mod._malloc(str.length);
-    heap.set(str, ptr);
-    return ptr;
+  const enc = new TextEncoder();
+
+  const bufStr = (s: string) => {
+    const bytes = enc.encode(s + "\0");
+    const p = mod._malloc(bytes.length);
+    heap.set(bytes, p);
+    return p;
   };
-  const argv = mod._malloc(4 * args.length);
-  args.forEach((a: string, i: number) => {
-    argvPtrs[i] = buf(a);
-    mod.setValue ? mod.setValue(argv + i * 4, argvPtrs[i], "i32") : heap; // no-op fallback when setValue missing
-    // fallback not needed if setValue exists; Emscripten JS glue normally provides setValue
-  });
+
+  // +1 for the NULL terminator
+  const argc = args.length;
+  const argv = mod._malloc(4 * (argc + 1));
+  const HEAP32: Int32Array = mod.HEAP32 ?? new Int32Array(heap.buffer);
+
+  for (let i = 0; i < argc; i++) {
+    const p = bufStr(args[i]);
+    if (mod.setValue) mod.setValue(argv + i * 4, p, "i32");
+    else HEAP32[(argv >> 2) + i] = p;
+  }
+
+  // argv[argc] = NULL
+  if (mod.setValue) mod.setValue(argv + argc * 4, 0, "i32");
+  else HEAP32[(argv >> 2) + argc] = 0;
+
   return argv;
 }
 
-// src/emf2svg.ts
-export async function emfOrWmfToSvg(
-  kind: VectorKind,
-  data: Uint8Array,
-  dpi = 96
-): Promise<string> {
+export async function emfOrWmfToSvg(kind: VectorKind, data: Uint8Array, dpi = 96) {
+  if (kind !== "emf") throw new Error("WMF support isn’t built yet. Use EMF for now.");
   const mod = await getModule(kind);
-
-  if (typeof (mod as any)._convert === "function")
-    return runDirectExport(mod, data, dpi);
-  if ((mod as any)._main && (mod as any).FS)
-    return runCliMain(mod, kind, data, dpi);
-
-  throw new Error(
-    "No convert entry in wasm module (missing _convert and _main). Rebuild the wasm with one of them exported."
-  );
+  try {
+    return await runDirectExport(mod, data, dpi);
+  } catch (e) {
+    console.error("[emf-to-png] direct convert failed; falling back to CLI:", e);
+    // NEW: fresh instance for CLI mode
+    const mod2 = await getModule(kind);
+    return runCliMain(mod2, kind, data, dpi);
+  }
 }
