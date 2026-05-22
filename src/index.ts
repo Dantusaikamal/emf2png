@@ -36,11 +36,13 @@ export async function convert(
     logger("[emf-to-png] Done.");
     return out;
   } catch (err: any) {
-    // graceful fallback
     const msg = `[emf-to-png] ${err?.code || err?.name || "ERROR"}: ${
       err?.message || err
     }`;
     (options.logger ?? (() => {}))(msg);
+    if (!options.fallback) {
+      throw err;
+    }
     const png = placeholderPng(
       "Unsupported EMF",
       options.width ?? 800,

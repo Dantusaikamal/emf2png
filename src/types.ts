@@ -5,5 +5,6 @@ export interface ConvertOptions {
   dpi?: number; // 96 by default
   antialias?: boolean; // currently always on in resvg; kept for API
   format?: "png" | "jpeg"; // default png
+  fallback?: boolean; // return a placeholder PNG instead of throwing on failure
   logger?: (msg: string) => void;
 }
