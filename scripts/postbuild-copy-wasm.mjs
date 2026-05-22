@@ -13,23 +13,12 @@ async function exists(p) {
 async function main() {
   const src = "wasm";
   const dstRoot = "dist/wasm";
-  const dstEsm = "dist/esm/wasm";
-  const dstCjs = "dist/cjs/wasm";
 
   await mkdir(dstRoot, { recursive: true });
-  await mkdir(dstEsm, { recursive: true });
-  await mkdir(dstCjs, { recursive: true });
 
-  for (const name of [
-    "emf2svg.js",
-    "wmf2svg.js",
-    "emf2svg.wasm",
-    "wmf2svg.wasm",
-  ]) {
+  for (const name of ["emf2svg.js", "emf2svg.wasm"]) {
     if (await exists(`${src}/${name}`)) {
       await cp(`${src}/${name}`, `${dstRoot}/${name}`);
-      await cp(`${src}/${name}`, `${dstEsm}/${name}`);
-      await cp(`${src}/${name}`, `${dstCjs}/${name}`);
     }
   }
 }

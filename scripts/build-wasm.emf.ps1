@@ -22,10 +22,31 @@ New-Item -ItemType Directory -Path $Tmp | Out-Null
 $Bash = @'
 set -euo pipefail
 
+# top of the script (after set -euo pipefail)
+EMF_WASM_DEBUG=${EMF_WASM_DEBUG:-0}
+
+
+
+echo "==[BUILD]=============================================="
+date
+uname -a
+echo "========================================================"
+
+# Verbose shell and emcc diagnostics
+set -x
+
 # Workspace inside container
 mkdir -p /work && cd /work
 
+# Toolchain versions (for logs)
+emcc -v || true
+echo "----- node -----"; node --version || true
+echo "----- wasm-ld -----"; wasm-ld --version || true
+echo "----- llvm-objdump -----"; (command -v llvm-objdump && llvm-objdump --version) || echo "llvm-objdump not present"
+echo "----- llvm-nm -----"; (command -v llvm-nm && llvm-nm --version) || echo "llvm-nm not present (symbol check will be skipped)"
+
 # 1) Clone libemf2svg
+echo "[INFO] Cloning libemf2svg..."
 git clone --depth=1 https://github.com/kakwa/libemf2svg.git
 cd libemf2svg
 
@@ -41,27 +62,25 @@ cat > /work/shims/fontconfig/fontconfig.h <<'H'
 extern "C" {
 #endif
 
-typedef int FcBool;
+/* minimal typedefs */
+typedef int           FcBool;
 typedef unsigned char FcChar8;
+typedef int           FcResult;
 
 typedef struct _FcPattern   { int dummy; } FcPattern;
 typedef struct _FcObjectSet { int dummy; } FcObjectSet;
 typedef struct _FcConfig    { int dummy; } FcConfig;
+typedef struct _FcFontSet   { int nfont; FcPattern** fonts; } FcFontSet;
 
-typedef struct _FcFontSet {
-  int nfont;
-  FcPattern** fonts;
-} FcFontSet;
-
-typedef int FcResult;
-
-/* constants used by libemf2svg */
+/* constants (on separate lines to keep preprocessor happy) */
 #ifndef FcTrue
 #define FcTrue 1
 #endif
+
 #ifndef FcFalse
 #define FcFalse 0
 #endif
+
 #ifndef FcResultMatch
 #define FcResultMatch 0
 #endif
@@ -69,15 +88,19 @@ typedef int FcResult;
 #ifndef FC_FAMILY
 #define FC_FAMILY "family"
 #endif
+
 #ifndef FC_STYLE
 #define FC_STYLE "style"
 #endif
+
 #ifndef FC_SLANT
 #define FC_SLANT "slant"
 #endif
+
 #ifndef FC_WEIGHT
 #define FC_WEIGHT "weight"
 #endif
+
 #ifndef FC_FILE
 #define FC_FILE "file"
 #endif
@@ -85,6 +108,7 @@ typedef int FcResult;
 #ifndef FC_SLANT_ROMAN
 #define FC_SLANT_ROMAN 0
 #endif
+
 #ifndef FC_SLANT_ITALIC
 #define FC_SLANT_ITALIC 100
 #endif
@@ -92,27 +116,35 @@ typedef int FcResult;
 #ifndef FC_WEIGHT_THIN
 #define FC_WEIGHT_THIN 0
 #endif
+
 #ifndef FC_WEIGHT_EXTRALIGHT
 #define FC_WEIGHT_EXTRALIGHT 40
 #endif
+
 #ifndef FC_WEIGHT_LIGHT
 #define FC_WEIGHT_LIGHT 50
 #endif
+
 #ifndef FC_WEIGHT_BOOK
 #define FC_WEIGHT_BOOK 75
 #endif
+
 #ifndef FC_WEIGHT_MEDIUM
 #define FC_WEIGHT_MEDIUM 100
 #endif
+
 #ifndef FC_WEIGHT_DEMIBOLD
 #define FC_WEIGHT_DEMIBOLD 180
 #endif
+
 #ifndef FC_WEIGHT_BOLD
 #define FC_WEIGHT_BOLD 200
 #endif
+
 #ifndef FC_WEIGHT_HEAVY
 #define FC_WEIGHT_HEAVY 215
 #endif
+
 #ifndef FC_WEIGHT_BLACK
 #define FC_WEIGHT_BLACK 210
 #endif
@@ -121,44 +153,52 @@ typedef int FcResult;
 #define FcMatchPattern 0
 #endif
 
-/* minimal no-op API */
-static inline FcBool      FcInit(void) { return FcTrue; }
-static inline void        FcFini(void) {}
+/* no-op implementations used by libemf2svg in our build */
+static inline FcBool     FcInit(void) { return FcTrue; }
+static inline void       FcFini(void) {}
 
-static inline FcPattern*  FcPatternCreate(void) { static FcPattern p; return &p; }
-static inline void        FcPatternDestroy(FcPattern* p) { (void)p; }
+static inline FcPattern* FcPatternCreate(void){ static FcPattern p; return &p; }
+static inline void       FcPatternDestroy(FcPattern* p){ (void)p; }
 
-static inline FcBool      FcConfigSubstitute(FcConfig* c, FcPattern* p, int k) { (void)c; (void)p; (void)k; return FcTrue; }
-static inline FcBool      FcDefaultSubstitute(FcPattern* p) { (void)p; return FcTrue; }
+static inline FcBool     FcConfigSubstitute(FcConfig* c, FcPattern* p, int k){ (void)c; (void)p; (void)k; return FcTrue; }
+static inline FcBool     FcDefaultSubstitute(FcPattern* p){ (void)p; return FcTrue; }
 
-static inline FcPattern*  FcNameParse(const FcChar8* name) { (void)name; static FcPattern p; return &p; }
+static inline FcPattern* FcNameParse(const FcChar8* name){ (void)name; static FcPattern p; return &p; }
 
-static inline FcBool      FcPatternAddString(FcPattern* p, const char* o, const FcChar8* s) { (void)p; (void)o; (void)s; return FcTrue; }
-static inline FcBool      FcPatternAddInteger(FcPattern* p, const char* o, int v) { (void)p; (void)o; (void)v; return FcTrue; }
+static inline FcBool     FcPatternAddString(FcPattern* p, const char* o, const FcChar8* s){ (void)p; (void)o; (void)s; return FcTrue; }
+static inline FcBool     FcPatternAddInteger(FcPattern* p, const char* o, int v){ (void)p; (void)o; (void)v; return FcTrue; }
 
-static inline FcResult    FcPatternGetString(const FcPattern* p, const char* o, int idx, FcChar8** s) { (void)p; (void)o; (void)idx; if (s) *s = (FcChar8*)""; return FcResultMatch; }
-static inline FcResult    FcPatternGetInteger(const FcPattern* p, const char* o, int idx, int* v) { (void)p; (void)o; (void)idx; if (v) *v = 0; return FcResultMatch; }
+static inline FcResult   FcPatternGetString(const FcPattern* p, const char* o, int idx, FcChar8** s){
+  (void)p; (void)o; (void)idx; if (s) *s = (FcChar8*)""; return FcResultMatch;
+}
+static inline FcResult   FcPatternGetInteger(const FcPattern* p, const char* o, int idx, int* v){
+  (void)p; (void)o; (void)idx; if (v) *v = 0; return FcResultMatch;
+}
 
-static inline FcPattern*  FcFontMatch(FcConfig* c, FcPattern* p, FcResult* r) { (void)c; (void)p; if (r) *r = FcResultMatch; static FcPattern m; return &m; }
+static inline FcPattern* FcFontMatch(FcConfig* c, FcPattern* p, FcResult* r){
+  (void)c; (void)p; if (r) *r = FcResultMatch; static FcPattern m; return &m;
+}
 
-static inline FcObjectSet* FcObjectSetBuild(const char* n, ...) { (void)n; static FcObjectSet os; return &os; }
-static inline void         FcObjectSetDestroy(FcObjectSet* os) { (void)os; }
+static inline FcObjectSet* FcObjectSetBuild(const char* n, ...){ (void)n; static FcObjectSet os; return &os; }
+static inline void         FcObjectSetDestroy(FcObjectSet* os){ (void)os; }
 
-/* extra stubs needed by libemf2svg_utils.c */
-static inline FcFontSet*  FcFontSetCreate(void) { static FcFontSet fs; fs.nfont = 0; fs.fonts = 0; return &fs; }
-static inline FcBool      FcFontSetAdd(FcFontSet* fs, FcPattern* p) { (void)p; if (fs) fs->nfont += 0; return FcTrue; }
-static inline FcPattern*  FcPatternFilter(FcPattern* p, FcObjectSet* os) { (void)os; return p; }
+static inline FcFontSet*   FcFontSetCreate(void){ static FcFontSet fs; fs.nfont = 0; fs.fonts = 0; return &fs; }
+static inline FcBool       FcFontSetAdd(FcFontSet* fs, FcPattern* p){ (void)p; if (fs) fs->nfont += 0; return FcTrue; }
+static inline FcPattern*   FcPatternFilter(FcPattern* p, FcObjectSet* os){ (void)os; return p; }
 
-static inline FcFontSet*  FcFontSetList(FcConfig* c, void* sets, int nsets, FcPattern* p, FcObjectSet* os) { (void)c; (void)sets; (void)nsets; (void)p; (void)os; static FcFontSet fs; fs.nfont = 0; fs.fonts = 0; return &fs; }
-static inline void        FcFontSetDestroy(FcFontSet* fs) { (void)fs; }
+static inline FcFontSet*   FcFontSetList(FcConfig* c, void* sets, int nsets, FcPattern* p, FcObjectSet* os){
+  (void)c; (void)sets; (void)nsets; (void)p; (void)os; static FcFontSet fs; fs.nfont = 0; fs.fonts = 0; return &fs;
+}
+static inline void         FcFontSetDestroy(FcFontSet* fs){ (void)fs; }
 
 #ifdef __cplusplus
 }
 #endif
+
 #endif /* FONTCONFIG_SHIM_H */
 H
 
-# 2b) UTF shim (3-arg wrappers)
+# 2b) UTF shim kept for older experiments; the current build uses vendored libuemf UTF sources.
 cat > /work/shims/utf_shim.c <<'C'
 #include <stdint.h>
 #include <stdlib.h>
@@ -204,106 +244,102 @@ int U_Utf8ToUtf32le(const char* in,int in_len,uint32_t** out){ size_t L=0; retur
 int U_Utf16leToUtf32le(const uint16_t* in,int in_len,uint32_t** out){ size_t L=0; return utf16le_to_utf32le_core(in,(size_t)in_len,out,&L); }
 int U_Utf32leToUtf8(const uint32_t* in,int in_len,char** out){ size_t L=0; return utf32le_to_utf8_core(in,(size_t)in_len,out,&L); }
 size_t wchar16len(const uint16_t* s){ size_t i=0; if(!s) return 0; while(s[i]!=0) i++; return i; }
-int get_real_color_icount(int a,int b,int c,int d){ (void)a;(void)b;(void)c;(void)d; return 0; }
 C
 
-# 2c) link-time stubs for optional/host-only pieces
+# 2c) link-time stubs incl. icount; plus a forced reference so GC can't drop it
 cat > /work/shims/lib_stubs.c <<'C'
 #include <stddef.h>
 #include <stdint.h>
-
+#include <stdlib.h>
 #if defined(__GNUC__) || defined(__clang__)
 #define WEAK __attribute__((weak))
+#define USED __attribute__((used))
 #else
 #define WEAK
+#define USED
 #endif
-
-/* libemf2svg_print expects a FUNCTION named U_emr_names(int) */
 WEAK const char* U_emr_names(int code) { (void)code; return ""; }
-
-/* These may or may not be provided by other units; keep them WEAK to avoid dups */
 WEAK int DIB_to_RGBA(const unsigned char* dib, int dib_size,
-                     unsigned char** out_rgba, int* w, int* h) {
-  (void)dib; (void)dib_size; if (out_rgba) *out_rgba = NULL;
-  if (w) *w = 0; if (h) *h = 0;
-  return 0;
+                     unsigned char** out_rgba, int* w, int* h,
+                     int p6, int p7, int p8, int p9) {
+  (void)dib; (void)dib_size; (void)p6; (void)p7; (void)p8; (void)p9;
+  if (out_rgba) *out_rgba = NULL; if (w) *w = 0; if (h) *h = 0; return 0;
 }
+WEAK int image_library_writer(void* ctx,
+                              const unsigned char* data, int len,
+                              int p4, int p5, int p6) {
+  (void)ctx; (void)data; (void)len; (void)p4; (void)p5; (void)p6; return 0;
+}
+WEAK int U_pmf_onerec_draw(const unsigned char* p, int len,
+                           char** svg, size_t* svg_len,
+                           int p5, int p6) {
+  (void)p; (void)len; (void)svg; (void)svg_len; (void)p5; (void)p6; return 0;
+}
+WEAK int U_pmf_onerec_print(const unsigned char* p, int len,
+                            char** out, size_t* out_len,
+                            int p5, int p6) {
+  (void)p; (void)len; (void)out; (void)out_len; (void)p5; (void)p6; return 0;
+}
+WEAK int get_real_color_count(const unsigned char* rgba) { (void)rgba; return 0; }
+USED WEAK int get_real_color_icount(int a, int b, int c, int d) {
+  (void)a; (void)b; (void)c; (void)d; return 0;
+}
+WEAK void freeEmfImageLibrary(void* p) { if (p) free(p); }
 
-WEAK int get_real_color_count(const unsigned char* rgba, int w, int h) {
-  (void)rgba; (void)w; (void)h; return 0;
-}
+C
 
-WEAK void freeEmfImageLibrary(void* p) { (void)p; }
-WEAK void image_library_writer(void* ctx, const unsigned char* data, int len) {
-  (void)ctx; (void)data; (void)len;
+# 2c.1) Force a reference to the symbol so it cannot be dropped even if weak
+cat > /work/shims/lib_force_ref.c <<'C'
+#ifdef __cplusplus
+extern "C" {
+#endif
+int get_real_color_icount(int, int, int, int);
+#ifdef __cplusplus
 }
+#endif
+__attribute__((used)) static int (*volatile __force_ref_icount)(int,int,int,int) = get_real_color_icount;
+C
 
-/* PMF helpers used by comment module in some builds */
-WEAK int U_pmf_onerec_draw(const unsigned char* p, int len, char** svg, size_t* svg_len) {
-  (void)p; (void)len; (void)svg; (void)svg_len; return 0;
-}
-WEAK int U_pmf_onerec_print(const unsigned char* p, int len, char** out, size_t* out_len) {
-  (void)p; (void)len; (void)out; (void)out_len; return 0;
+# (Optional) Try to print the symbol table if tools exist (non-fatal)
+emcc /work/shims/lib_stubs.c -c -o /work/shims/lib_stubs.o || exit 1
+if command -v llvm-nm >/dev/null 2>&1; then
+  echo "----- llvm-nm on lib_stubs.o (expect get_real_color_icount) -----"
+  llvm-nm -g /work/shims/lib_stubs.o || true
+else
+  echo "[WARN] llvm-nm not available; skipping nm symbol check"
+fi
+
+# 2d) minimal wrapper exporting `convert`
+cat > /work/wrapper_emf.c <<'C'
+#include <stdint.h>
+#include <stdlib.h>
+#include <string.h>
+#include "emf2svg.h"
+#include "fontconfig/fontconfig.h"
+int convert(const uint8_t* in, int len, int dpi, uint8_t** out, int* out_len) {
+  (void)dpi;
+  FcInit();
+  char*  svg = NULL; size_t L = 0;
+  generatorOptions opt; memset(&opt, 0, sizeof(opt));
+  opt.verbose=0; opt.emfplus=0; opt.nameSpace="svg"; opt.svgDelimiter=1; opt.imgWidth=0; opt.imgHeight=0;
+  int rc = emf2svg((char*)in, (size_t)len, &svg, &L, &opt);
+  FcFini();
+  if (rc != 1 || !svg || L == 0) return rc == 1 ? 99 : 1;
+  *out=(uint8_t*)svg; *out_len=(int)L; return 0;
 }
 C
 
-# 2d) minimal wrapper exporting `convert` (C API expected by JS)
-cat > /work/wrapper_emf.cpp <<'CPP'
-#include <stdlib.h>
-#include <string.h>
-
-extern "C" {
-  typedef struct {
-    bool verbose;
-    bool emfplus;
-    const char* nameSpace;
-    bool svgDelimiter;
-    size_t imgWidth;
-    size_t imgHeight;
-  } generatorOptions;
-
-  // From libemf2svg
-  int emf2svg(const char* emf, size_t emf_len,
-              char** svg_out, size_t* svg_len,
-              generatorOptions* opt);
-}
-
-// Exported entry point
-extern "C" int convert(const unsigned char* in, int len, int dpi,
-                       char** out, int* out_len) {
-  (void)dpi;
-  generatorOptions opt = {};
-  opt.verbose = false;
-  opt.emfplus = false;
-  opt.nameSpace = "svg";
-  opt.svgDelimiter = true;
-  opt.imgWidth = 0;
-  opt.imgHeight = 0;
-
-  char* svg = nullptr;
-  size_t L = 0;
-  int rc = emf2svg(reinterpret_cast<const char*>(in),
-                   static_cast<size_t>(len), &svg, &L, &opt);
-  if (rc != 0 || !svg) return rc != 0 ? rc : 99;
-
-  *out = svg;
-  *out_len = static_cast<int>(L);
-  return 0;
-}
-CPP
-
-# 2e) CLI shim (_main) – consumed by JS CLI path
+# 2e) CLI shim
 cat > /work/cli_main.c <<'C'
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
-#include <string.h>  // for strcmp, atoi
+#include <string.h>
 
+/* Unconditional prototype so C builds see it too */
 #ifdef __cplusplus
 extern "C" {
 #endif
-// JS expects this C ABI:
-// int convert(const uint8_t* in, int len, int dpi, uint8_t** outPtr, int* outLen);
 int convert(const uint8_t* in, int len, int dpi, uint8_t** outPtr, int* outLen);
 #ifdef __cplusplus
 }
@@ -355,75 +391,88 @@ int main(int argc, char** argv) {
 }
 C
 
-# 3) Gather sources (write a newline-delimited list; arrays are fragile across shells)
+# 3) Gather sources (newline list)
 FILES_TXT=/work/files.list
 : > "$FILES_TXT"
-
 find src -type f -name "*.c" \
   ! -path "src/conv/*" \
   ! -iname "pmf*.c" \
   ! -iname "wmf*.c" \
   -print >> "$FILES_TXT"
-
 find src -type f -name "*.cpp" \
   ! -path "src/conv/*" \
   ! -iname "pmf*.cpp" \
   ! -iname "wmf*.cpp" \
   -print >> "$FILES_TXT"
-
 # Ensure print unit is present
 if ! grep -q '^src/lib/emf2svg_print.c$' "$FILES_TXT"; then
   if [ -f src/lib/emf2svg_print.c ]; then echo 'src/lib/emf2svg_print.c' >> "$FILES_TXT"; fi
 fi
 
-# Prepend our shims + wrapper
+# Prepend the wrapper and the same core sources libemf2svg uses in CMake.
 ALL_TXT=/work/allfiles.list
 {
-  echo /work/shims/utf_shim.c
-  echo /work/shims/lib_stubs.c
-  echo /work/wrapper_emf.cpp
+  echo /work/wrapper_emf.c
+  echo src/lib/pmf2svg.c
+  echo src/lib/pmf2svg_print.c
+  echo vendor/libuemf/uemf_utf.c
+  echo vendor/libuemf/uemf_endian.c
+  echo vendor/libuemf/uemf.c
+  echo vendor/libuemf/upmf.c
   cat "$FILES_TXT"
 } > "$ALL_TXT"
 
-# 4) Trigger emscripten ports fetch with a trivial compile
+echo "---- allfiles.list ----"; cat /work/allfiles.list; echo "------------------------"
+
+# 4) Prime emscripten ports
 echo 'int __dummy(void){return 0;}' >/tmp/empty.c
-emcc -O3 -c /tmp/empty.c -o /tmp/empty.o \
-  -sUSE_ZLIB=1 -sUSE_FREETYPE=1 -sUSE_LIBPNG=1 >/dev/null 2>&1 || true
+emcc -O3 -c /tmp/empty.c -o /tmp/empty.o -sUSE_ZLIB=1 -sUSE_FREETYPE=1 -sUSE_LIBPNG=1 >/dev/null 2>&1 || true
 
 # --- visibility for debugging
-set -x
-echo "Source file count:"
-wc -l "$ALL_TXT" || true
-echo "First few files:"
-head -n 20 "$ALL_TXT" || true
-echo "Last few files:"
-tail -n 20 "$ALL_TXT" || true
+echo "Source file count:"; wc -l "$ALL_TXT" || true
+echo "First few files:";   head -n 20 "$ALL_TXT" || true
+echo "Last few files:";    tail -n 20 "$ALL_TXT" || true
 
-# Guard: ensure we actually have inputs (avoid bash redirections/short-circuit)
-CNT="$(wc -l "$ALL_TXT" | awk '{print $1}')"
-if [ -z "$CNT" ]; then CNT=0; fi
-if [ "$CNT" -lt 3 ]; then
-  echo "ERROR: Source list unexpectedly small ($CNT). Aborting." 1>&2
-  exit 3
-fi
+# Guard
+CNT="$(wc -l "$ALL_TXT" | awk '{print $1}')"; [ -z "$CNT" ] && CNT=0
+if [ "$CNT" -lt 3 ]; then echo "ERROR: Source list unexpectedly small ($CNT). Aborting." 1>&2; exit 3; fi
 
-# 5) Compile + link to /out using xargs
-xargs -a /work/allfiles.list emcc -O3 \
+# 5) Detect header dir and compile/link without xargs (ensure -I precede sources)
+INC_DIRS=""
+for d in inc include src src/lib ; do
+  if [ -f "$d/emf2svg.h" ]; then
+    INC_DIRS="$INC_DIRS -I/work/libemf2svg/$d"
+  fi
+done
+# Always include our shims too
+INC_DIRS="$INC_DIRS -I/work/libemf2svg/vendor/libuemf -I/work/libemf2svg/vendor/libuemf/include -I/work/shims -I/work/shims/fontconfig -I/work/libemf2svg -I/work"
+
+# Build a single list of sources so options come first
+SRCS="$(tr '\n' ' ' < /work/allfiles.list)"
+
+emcc -O2 -g0 \
   -s MODULARIZE=1 -s EXPORT_ES6=1 \
-  -s ALLOW_MEMORY_GROWTH=1 -s EXIT_RUNTIME=1 \
-  -s FORCE_FILESYSTEM=1 -s ENVIRONMENT=node \
-  -s 'EXPORTED_FUNCTIONS=["_main","_malloc","_free"]' \
-  -s 'EXPORTED_RUNTIME_METHODS=["getValue","setValue","FS","HEAPU8","HEAP8","cwrap"]' \
-  -sSTACK_SIZE=2MB -sINITIAL_MEMORY=128MB \
-  -sUSE_ZLIB=1 -sUSE_FREETYPE=1 -sUSE_LIBPNG=1 \
-  -Iinc -Isrc -I/work/shims -I/work/shims/fontconfig \
-  /work/cli_main.c \
+  -s ENVIRONMENT=node -s FORCE_FILESYSTEM=1 \
+  -s ALLOW_MEMORY_GROWTH=1 -s INITIAL_MEMORY=256MB -s STACK_SIZE=2MB \
+  -s ASSERTIONS=1 -s SAFE_HEAP=0 \
+  -s INVOKE_RUN=0 -s EXIT_RUNTIME=1 \
+  -s EXPORTED_FUNCTIONS='["_malloc","_free","_convert"]' \
+  -s EXPORTED_RUNTIME_METHODS='["getValue","setValue","FS","HEAPU8","HEAP8","HEAP32","cwrap","ccall"]' \
+  -s USE_ZLIB=1 -s USE_FREETYPE=1 -s USE_LIBPNG=1 \
+  -Wl,--fatal-warnings \
+  $INC_DIRS \
+  $SRCS \
   -o /out/emf2svg.js
 
-  
-ls -lh /out
-'@
 
+if [ "$EMF_WASM_DEBUG" = "1" ] && [ -f /out/emf2svg.wasm ]; then
+  /emsdk/upstream/bin/wasm-opt --safe-heap /out/emf2svg.wasm -o /out/emf2svg.wasm -g || echo "[WARN] wasm-opt not available"
+fi
+
+
+echo "----- OUT DIR -----"; ls -lh /out
+echo "==================== BUILD DONE ========================"
+'@
 
 # --- Write LF bash to disk
 $BashLF = $Bash -replace "`r`n", "`n"

@@ -1,37 +1,40 @@
 # emf-to-png
 
-WASM-based **EMF/WMF → PNG/JPEG** converter for Node.js. No Office, LibreOffice, or Inkscape. Works on Linux/macOS/Windows and headless servers.
+Convert EMF files to PNG or JPEG in Node.js without Office, LibreOffice, or
+Inkscape.
+
+This package is built for the common DOCX extraction case where images appear as
+`.emf` files and need to be rendered on a server or in a Node.js pipeline.
+
+## Status
+
+EMF support is working for classic EMF files through a bundled WebAssembly build
+of `libemf2svg`, followed by rasterization with `@resvg/resvg-js`.
+
+WMF and EMF+ are not part of the current stable API yet. Some advanced or
+application-specific EMF records may still fail depending on upstream renderer
+coverage.
 
 ## Install
 
 ```bash
-npm i emf-to-png
-# or
-npx emf-to-png input.emf output.png
+npm install emf-to-png
 ```
 
-## Usage:
+## Usage
 
-```javascript
-import { convertFile, convert } from "emf-to-png";
+```js
+import { convert, convertFile } from "emf-to-png";
+import { readFile } from "node:fs/promises";
 
-await convertFile("reaction.emf", "reaction.png");
+await convertFile("diagram.emf", "diagram.png", { width: 1200 });
 
-const buf = await convert(await fs.promises.readFile("diagram.emf"), {
+const input = await readFile("diagram.emf");
+const png = await convert(input, {
   width: 1200,
   background: "#ffffff",
   format: "png",
 });
-```
-
-### API:
-
-```javascript
-
-convert(emfBuffer: Buffer | Uint8Array, options?: ConvertOptions): Promise<Buffer>
-
-convertFile(inputPath: string, outputPath?: string, options?: ConvertOptions): Promise<string>
-
 ```
 
 ## CLI
@@ -40,50 +43,64 @@ convertFile(inputPath: string, outputPath?: string, options?: ConvertOptions): P
 npx emf-to-png input.emf output.png
 ```
 
-### Errors
-
-- UnsupportedFormatError
-- ParseError
-- ConversionError
-
-## WASM build notes (one-time)
-
-We’ll compile the EMF/WMF→SVG engines to WebAssembly:
-
-1. **libemf2svg (EMF → SVG)**
-2. **libwmf (WMF → SVG)**
-
-Typical Emscripten command pattern (adjust to your sources/exports):
+Environment options:
 
 ```bash
-emcc -O3 -s MODULARIZE=1 -s EXPORT_ES6=1 \
-  -s ALLOW_MEMORY_GROWTH=1 \
-  -s EXPORTED_FUNCTIONS='["_convert","_malloc","_free"]' \
-  -s EXPORTED_RUNTIME_METHODS='["getValue","setValue"]' \
-  -o wasm/emf2svg.js \
-  src-cpp/emf2svg.cpp
+EMF_PNG_WIDTH=1200
+EMF_PNG_HEIGHT=800
+EMF_PNG_DPI=96
+EMF_PNG_BG=#ffffff
+EMF_PNG_FORMAT=png
+```
 
-emf-to-png/
-├─ package.json
-├─ README.md
-├─ LICENSE
-├─ src/
-│ ├─ index.ts
-│ ├─ types.ts
-│ ├─ errors.ts
-│ ├─ detect.ts
-│ ├─ emf2svg.ts # WASM bridge for EMF/WMF → SVG
-│ ├─ svgRaster.ts # SVG → PNG/JPEG via resvg-js + jpeg-js
-│ └─ placeholder.ts # graceful fallback ("Unsupported EMF")
-├─ bin/
-│ └─ emf-to-png.mjs # CLI
-├─ wasm/
-│ ├─ emf2svg.wasm # prebuilt from libemf2svg (emscripten)
-│ └─ wmf2svg.wasm # (optional) if WMF isn’t covered by emf2svg
-├─ test/
-│ ├─ convert.test.ts
-│ └─ fixtures/
-│ ├─ test1.emf
-│ └─ test2.wmf
-└─ .github/workflows/ci.yml
+## API
+
+```ts
+convert(input: Buffer | Uint8Array, options?: ConvertOptions): Promise<Buffer>
+convertFile(inputPath: string, outputPath?: string, options?: ConvertOptions): Promise<string>
+emfOrWmfToSvg(kind: "emf", data: Uint8Array, dpi?: number): Promise<string>
+```
+
+`ConvertOptions`:
+
+```ts
+interface ConvertOptions {
+  width?: number;
+  height?: number;
+  background?: string;
+  dpi?: number;
+  format?: "png" | "jpeg";
+  fallback?: boolean;
+  logger?: (message: string) => void;
+}
+```
+
+By default, conversion errors throw. Set `fallback: true` if you prefer a
+placeholder PNG instead.
+
+## Development
+
+Build the EMF WebAssembly renderer with Docker:
+
+```bash
+npm run build:wasm
+```
+
+Build the JavaScript package:
+
+```bash
+npm run build:js
+node scripts/postbuild-copy-wasm.mjs
+```
+
+Run tests:
+
+```bash
+npm test
+```
+
+Full build:
+
+```bash
+npm run build
 ```

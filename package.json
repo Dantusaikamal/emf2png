@@ -1,21 +1,18 @@
 {
   "name": "emf-to-png",
   "version": "0.1.0",
-  "description": "WASM-based EMF/WMF → PNG (or JPEG) converter for Node.js. No Office/LibreOffice/Inkscape required.",
+  "description": "WASM-based EMF to PNG/JPEG converter for Node.js. No Office, LibreOffice, or Inkscape required.",
   "license": "MIT",
   "type": "module",
-  "main": "./dist/index.cjs",
+  "main": "./dist/index.js",
   "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
-      "import": "./dist/index.js",
-      "require": "./dist/index.cjs",
-      "types": "./dist/index.d.ts"
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
     },
-    "./cli": "./bin/emf-to-png.mjs",
-    "./emf2svg.js": "./wasm/emf2svg.js",
-    "./emf2svg.wasm": "./wasm/emf2svg.wasm"
+    "./cli": "./bin/emf-to-png.mjs"
   },
   "bin": {
     "emf-to-png": "./bin/emf-to-png.mjs"
@@ -23,16 +20,11 @@
   "files": [
     "dist/**/*",
     "bin/emf-to-png.mjs",
-    "wasm/emf2svg.js",
-    "wasm/emf2svg.wasm",
-    "wasm/*.wasm",
-    "wasm/*.js",
     "README.md",
     "LICENSE"
   ],
   "keywords": [
     "emf",
-    "wmf",
     "vector",
     "converter",
     "png",
@@ -40,17 +32,17 @@
     "svg",
     "wasm",
     "nodejs",
-    "graphics"
+    "graphics",
+    "docx"
   ],
   "engines": {
     "node": ">=18"
   },
   "scripts": {
-    "clean": "rimraf dist wasm\\emf2svg.wasm wasm\\emf2svg.js wasm\\wmf2svg.wasm wasm\\wmf2svg.js && powershell -NoProfile -Command \"Remove-Item -Recurse -Force .work-* -ErrorAction SilentlyContinue\"",
-    "build:wasm:emf": "bash scripts/build-wasm.emf.sh",
-    "build:wasm:wmf": "bash scripts/build-wasm.wmf.sh",
-    "build:wasm": "powershell -ExecutionPolicy Bypass -File scripts/build-wasm.emf.ps1 ; powershell -ExecutionPolicy Bypass -File scripts/build-wasm.wmf.ps1",
-    "build:js": "tsup src/index.ts --format esm,cjs --dts --clean",
+    "clean": "rimraf dist wasm\\emf2svg.wasm wasm\\emf2svg.js && powershell -NoProfile -Command \"Remove-Item -Recurse -Force .work-* -ErrorAction SilentlyContinue\"",
+    "build:wasm:emf": "node scripts/build-wasm.emf.mjs",
+    "build:wasm": "npm run build:wasm:emf",
+    "build:js": "tsup src/index.ts --format esm --dts --clean",
     "build": "npm run build:wasm && npm run build:js && node scripts/postbuild-copy-wasm.mjs",
     "test": "vitest run",
     "prepublishOnly": "npm run clean && npm run build && npm test"
