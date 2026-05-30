@@ -7,8 +7,8 @@ const args = process.argv.slice(2);
 
 function help(exit = 0) {
   console.log(`Usage:
-  emf-to-png <input.emf|wmf> [output.(png|jpg)]
-  emf-to-png <input.emf|wmf> -o <output.(png|jpg)>
+  emf-to-png <input.emf> [output.(png|jpg)]
+  emf-to-png <input.emf> -o <output.(png|jpg)>
 
 Env options:
   EMF_PNG_WIDTH, EMF_PNG_HEIGHT, EMF_PNG_DPI, EMF_PNG_BG,
