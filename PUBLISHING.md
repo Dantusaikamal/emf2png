@@ -10,8 +10,8 @@ WebAssembly renderer under `dist/wasm`.
 - npm account with publish access to `emf-to-png`.
 - Docker Desktop running, because `npm run build` rebuilds the EMF WebAssembly
   module with the `emscripten/emsdk` Docker image.
-- PowerShell or `pwsh`, because `scripts/build-wasm.emf.mjs` launches
-  `scripts/build-wasm.emf.ps1`.
+- PowerShell or `pwsh`, because `scripts/build-wasm.emf.mjs` launches the
+  Docker/Emscripten build through `scripts/build-wasm.emf.ps1`.
 
 ## Pre-publish checklist
 
@@ -33,9 +33,13 @@ WebAssembly renderer under `dist/wasm`.
    npm run clean
    npm run build
    npm test
+   npm run test:pack
    ```
 
-3. Inspect the package contents:
+   `npm run test:pack` runs `npm pack`, installs the generated tarball into a
+   temporary project, imports `emf-to-png`, and converts a real EMF fixture.
+
+3. Optionally inspect the package contents:
 
    ```bash
    npm pack --dry-run
@@ -87,7 +91,9 @@ npm publish --tag beta
 
 ## Post-publish smoke test
 
-Use a temporary directory outside this repository:
+The local `npm run test:pack` command already tests the packed tarball before
+publishing. After publishing, use a temporary directory outside this repository
+to verify the registry package:
 
 ```bash
 mkdir emf-to-png-smoke

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { readFile, mkdir } from "node:fs/promises";
 import { dirname, extname, resolve } from "node:path";
 import { convert, convertFile } from "../dist/index.js";
 
@@ -63,14 +63,9 @@ const opts = {
 (async () => {
   try {
     if (output) {
-      const outPath = await convertFile(input, output, opts).catch(async () => {
-        const buf = await convert(await readFile(input), opts);
-        const abs = resolve(output);
-        await mkdir(dirname(abs), { recursive: true });
-        await writeFile(abs, buf);
-        return abs;
-      });
-      console.log(outPath);
+      const abs = resolve(output);
+      await mkdir(dirname(abs), { recursive: true });
+      console.log(await convertFile(input, abs, opts));
     } else {
       const buf = await convert(await readFile(input), opts);
       process.stdout.write(buf);

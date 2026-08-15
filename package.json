@@ -40,14 +40,15 @@
     "node": ">=18"
   },
   "scripts": {
-    "clean": "rimraf dist wasm\\emf2svg.wasm wasm\\emf2svg.js && powershell -NoProfile -Command \"Remove-Item -Recurse -Force .work-* -ErrorAction SilentlyContinue\"",
+    "clean": "node scripts/clean.mjs",
     "build:wasm:emf": "node scripts/build-wasm.emf.mjs",
     "build:wasm": "npm run build:wasm:emf",
     "build:js": "tsup src/index.ts --format esm --dts --clean",
     "build": "npm run build:wasm && npm run build:js && node scripts/postbuild-copy-wasm.mjs",
     "test": "vitest run",
+    "test:pack": "node scripts/smoke-packed.mjs",
     "prepack": "npm run build:js && node scripts/postbuild-copy-wasm.mjs",
-    "prepublishOnly": "npm run clean && npm run build && npm test"
+    "prepublishOnly": "npm run clean && npm run build && npm test && npm run test:pack"
   },
   "dependencies": {
     "@resvg/resvg-js": "^2.6.2",
@@ -55,7 +56,6 @@
   },
   "devDependencies": {
     "@types/node": "^22.5.1",
-    "rimraf": "^6.0.1",
     "tsup": "^8.0.2",
     "typescript": "^5.6.2",
     "vitest": "^2.1.3"

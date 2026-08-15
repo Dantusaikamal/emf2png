@@ -1,6 +1,6 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { basename, extname } from "node:path";
-import { ConvertOptions, InspectResult } from "./types.js";
+import { ConvertOptions, InspectResult, OutputFormat } from "./types.js";
 import {
   EmfToPngError,
   UnsupportedFormatError,
@@ -34,7 +34,8 @@ export async function convert(
   input: Buffer | Uint8Array,
   options: ConvertOptions = {}
 ): Promise<Buffer> {
-  const logger = options.logger ?? (() => {});
+  const effectiveOptions = validateOptions(options);
+  const logger = effectiveOptions.logger ?? (() => {});
   let info: InspectResult | null = null;
   try {
     const data = input instanceof Uint8Array ? input : new Uint8Array(input);
@@ -49,10 +50,10 @@ export async function convert(
     }
 
     logger(`[emf-to-png] Detected ${kind.toUpperCase()}; converting to SVG...`);
-    const svg = await emfOrWmfToSvg(kind, data, options.dpi ?? 96);
+    const svg = await emfOrWmfToSvg(kind, data, effectiveOptions.dpi ?? 96);
 
     logger("[emf-to-png] Rasterizing SVG...");
-    const out = safeRasterizeSvg(svg, options);
+    const out = safeRasterizeSvg(svg, effectiveOptions);
     logger("[emf-to-png] Done.");
     return out;
   } catch (err: any) {
@@ -68,10 +69,10 @@ export async function convert(
       convertedError?.code || convertedError?.name || "ERROR"
     }: ${convertedError?.message || convertedError}`;
     logger(msg);
-    if (!options.fallback) {
+    if (!effectiveOptions.fallback) {
       throw convertedError;
     }
-    return placeholderImage("Unsupported EMF", options);
+    return placeholderImage("Unsupported EMF", effectiveOptions);
   }
 }
 
@@ -81,13 +82,16 @@ export async function convertFile(
   options: ConvertOptions = {}
 ): Promise<string> {
   const buf = await readFile(inputPath);
-  const outBuf = await convert(buf, options);
   let outPath = outputPath;
   if (!outPath) {
     const ext = options.format === "jpeg" ? ".jpg" : ".png";
     const base = basename(inputPath, extname(inputPath));
     outPath = base + ext;
   }
+  const outBuf = await convert(buf, {
+    ...options,
+    format: options.format ?? inferFormatFromPath(outPath) ?? "png",
+  });
   await writeFile(outPath, outBuf);
   return outPath;
 }
@@ -128,5 +132,26 @@ function safeRasterizeSvg(svg: string, options: ConvertOptions): Buffer {
     return rasterizeSvg(svg, options);
   } catch (err) {
     throw new RasterizationError("Failed to rasterize SVG output.", err);
+  }
+}
+
+function inferFormatFromPath(path: string): OutputFormat | undefined {
+  const ext = extname(path).toLowerCase();
+  if (ext === ".jpg" || ext === ".jpeg") return "jpeg";
+  if (ext === ".png") return "png";
+  return undefined;
+}
+
+function validateOptions(options: ConvertOptions): ConvertOptions {
+  validatePositiveNumber(options.width, "width");
+  validatePositiveNumber(options.height, "height");
+  validatePositiveNumber(options.dpi, "dpi");
+  return options;
+}
+
+function validatePositiveNumber(value: number | undefined, name: string): void {
+  if (value === undefined) return;
+  if (!Number.isFinite(value) || value <= 0) {
+    throw new ConversionError(`${name} must be a positive number.`);
   }
 }

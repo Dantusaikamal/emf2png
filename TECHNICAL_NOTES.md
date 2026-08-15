@@ -77,6 +77,8 @@ Important files:
   build script.
 - `scripts/postbuild-copy-wasm.mjs`: copies `wasm/emf2svg.*` into
   `dist/wasm`.
+- `scripts/clean.mjs`: cross-platform cleanup for `dist`, generated WASM glue,
+  and `.work-*` build directories.
 
 The npm package is ESM-only:
 
@@ -110,6 +112,17 @@ the common EMF signature bytes at offsets `40..43`:
 ```ts
 if (a === 0x20 && b === 0x45 && c === 0x4d && d === 0x46) return "emf";
 ```
+
+Before conversion, `src/index.ts` validates user-facing numeric options:
+
+```ts
+validatePositiveNumber(options.width, "width");
+validatePositiveNumber(options.height, "height");
+validatePositiveNumber(options.dpi, "dpi");
+```
+
+Invalid `width`, `height`, or `dpi` values throw `ConversionError` before
+fallback behavior is considered.
 
 After detection:
 
@@ -285,6 +298,8 @@ For JPEG, the code asks `resvg` for RGBA pixels and encodes them with
 `jpeg-js`:
 
 ```ts
+const effectiveBackground =
+  background ?? (format === "jpeg" ? "#ffffff" : undefined);
 const raw = Buffer.from(img.pixels);
 const jpegBuf = jpeg.encode(
   { data: raw, width: img.width, height: img.height },
@@ -293,6 +308,8 @@ const jpegBuf = jpeg.encode(
 ```
 
 JPEG quality is exposed through `ConvertOptions.quality` and clamped to `1..100`.
+If no background is supplied for JPEG output, `src/svgRaster.ts` uses white
+instead of leaving transparent SVG areas dependent on discarded alpha data.
 
 ## 9. CLI Design
 
@@ -375,8 +392,15 @@ export interface ConvertOptions {
 }
 ```
 
-`convertFile()` chooses `.jpg` only when `options.format === "jpeg"`; otherwise
-it defaults to `.png`.
+`convertFile()` infers the output format from the output extension when
+`options.format` is not explicitly supplied:
+
+```ts
+format: options.format ?? inferFormatFromPath(outPath) ?? "png"
+```
+
+So `convertFile("a.emf", "a.jpg")` writes JPEG bytes, while an explicit
+`options.format` still takes precedence.
 
 ## 11. Important Limitations
 
@@ -390,7 +414,11 @@ EMF+:
 
 - `src/detect.ts` includes `isEmfPlus()`, which scans EMF records for
   `EMR_GDICOMMENT` records containing the `"EMF+"` signature.
-- This detector is currently not wired into `convert()`.
+- `EMR_GDICOMMENT` stores a `DataSize` DWORD before the comment bytes, so the
+  `"EMF+"` signature is checked at `recordOffset + 12`, not `recordOffset + 8`.
+- `convert()` calls `inspect()` and logs when EMF+ records are present. If an
+  EMF+ file fails through the classic EMF path with `EmfParseError`, the error
+  is wrapped as `UnsupportedFeatureError`.
 - The WASM wrapper sets `opt.emfplus=0`, so EMF+ handling is not enabled.
 
 Advanced EMF records:
@@ -402,7 +430,7 @@ Advanced EMF records:
 Fallback behavior:
 
 - By default, errors throw.
-- If `fallback: true`, `src/index.ts` calls `placeholderPng()` from
+- If `fallback: true`, `src/index.ts` calls `placeholderImage()` from
   `src/placeholder.ts`.
 - The placeholder is an SVG rendered with `@resvg/resvg-js`, containing the text
   `"Unsupported EMF"`.
@@ -424,13 +452,14 @@ Main scripts from `package.json`:
 
 ```json
 {
-  "clean": "rimraf dist wasm\\emf2svg.wasm wasm\\emf2svg.js && powershell -NoProfile -Command \"Remove-Item -Recurse -Force .work-* -ErrorAction SilentlyContinue\"",
+  "clean": "node scripts/clean.mjs",
   "build:wasm:emf": "node scripts/build-wasm.emf.mjs",
   "build:wasm": "npm run build:wasm:emf",
   "build:js": "tsup src/index.ts --format esm --dts --clean",
   "build": "npm run build:wasm && npm run build:js && node scripts/postbuild-copy-wasm.mjs",
   "test": "vitest run",
-  "prepublishOnly": "npm run clean && npm run build && npm test"
+  "test:pack": "node scripts/smoke-packed.mjs",
+  "prepublishOnly": "npm run clean && npm run build && npm test && npm run test:pack"
 }
 ```
 
@@ -477,11 +506,18 @@ They verify:
 - SVG contains expected SVG/path markers.
 - SVG normalization removed the malformed `"xmlns:` sequence.
 - `test1.emf` converts to a PNG buffer.
+- `test1.emf` converts to a JPEG buffer.
 - `test2.emf` converts to a PNG buffer.
 - invalid input throws `UnsupportedFormatError` by default.
 - invalid input can return a placeholder image with `fallback: true`.
 - fallback JPEG output has JPEG magic bytes.
+- synthetic EMF+ data is detected at the correct `EMR_GDICOMMENT` signature
+  offset.
+- `convertFile()` infers JPEG from `.jpg` output paths.
+- invalid `width`, `height`, and `dpi` options throw `ConversionError`.
 - WMF input throws `UnsupportedFeatureError`.
+- `scripts/smoke-packed.mjs` installs the packed npm tarball in a temporary
+  project, imports `emf-to-png`, and converts a real EMF fixture.
 
 PNG validation checks the PNG magic number:
 

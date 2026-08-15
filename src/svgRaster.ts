@@ -5,9 +5,11 @@ import type { ConvertOptions } from "./types.js";
 export function rasterizeSvg(svg: string, opts: ConvertOptions = {}): Buffer {
   const { width, height, background, format = "png" } = opts;
   const fitTo = resolveFitTo(svg, opts);
+  const effectiveBackground =
+    background ?? (format === "jpeg" ? "#ffffff" : undefined);
 
   const resvg = new Resvg(svg, {
-    background: background ?? undefined,
+    background: effectiveBackground,
     fitTo,
   });
 

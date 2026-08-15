@@ -11,8 +11,7 @@ Focus: keep existing users safe while improving diagnostics.
 - Add more real-world EMF fixtures from DOCX, PPTX, Excel, Visio, and chart
   exports.
 - Improve error messages with record-level context when `libemf2svg` fails.
-- Add package smoke tests that install the generated npm tarball in a temporary
-  project and verify imports plus CLI execution.
+- Expand package smoke tests to include CLI execution after tarball install.
 - Add cross-platform CI for Windows, macOS, and Linux across supported Node
   versions.
 - Document unsupported examples and fixture-submission guidance.

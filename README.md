@@ -28,6 +28,7 @@ import { convert, convertFile, inspect } from "emf-to-png";
 import { readFile } from "node:fs/promises";
 
 await convertFile("diagram.emf", "diagram.png", { width: 1200 });
+await convertFile("diagram.emf", "diagram.jpg"); // infers JPEG from extension
 
 const input = await readFile("diagram.emf");
 const info = inspect(input);
@@ -95,10 +96,17 @@ By default, conversion errors throw. Set `fallback: true` if you prefer a
 placeholder image instead. Fallback output respects `format`, so JPEG requests
 receive JPEG bytes.
 
+`width`, `height`, and `dpi` must be positive finite numbers. Invalid numeric
+options throw `ConversionError` before conversion or fallback handling.
+
 When both `width` and `height` are provided, `fit: "contain"` is used by
 default. This preserves aspect ratio and fits the rendered image inside the
 requested box. Use `fit: "width"` or `fit: "height"` to force a specific
 dimension.
+
+`convertFile()` infers `format: "jpeg"` for `.jpg` and `.jpeg` output paths
+when `options.format` is not explicitly supplied. Explicit `options.format`
+always wins.
 
 ## Inspecting Inputs
 
@@ -157,6 +165,12 @@ Run tests:
 
 ```bash
 npm test
+```
+
+Run the packed npm tarball smoke test:
+
+```bash
+npm run test:pack
 ```
 
 Full build:
