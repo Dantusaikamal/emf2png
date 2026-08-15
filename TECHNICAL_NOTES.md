@@ -123,7 +123,10 @@ the current implementation only supports `kind === "emf"`. If called with WMF,
 it throws:
 
 ```ts
-throw new Error("WMF support is not built yet. Use EMF files for now.");
+throw new UnsupportedFeatureError(
+  "wmf",
+  "WMF support is not built yet. Use EMF files for now."
+);
 ```
 
 ## 6. How WebAssembly Is Used
@@ -278,13 +281,18 @@ For PNG:
 return Buffer.from(img.asPng());
 ```
 
-For JPEG, the code asks `resvg` for raw RGBA pixels and encodes them with
+For JPEG, the code asks `resvg` for RGBA pixels and encodes them with
 `jpeg-js`:
 
 ```ts
-const { data, width: w, height: h } = img.asRaw();
-const jpegBuf = jpeg.encode({ data: raw, width: w, height: h }, 90).data;
+const raw = Buffer.from(img.pixels);
+const jpegBuf = jpeg.encode(
+  { data: raw, width: img.width, height: img.height },
+  clampQuality(opts.quality)
+).data;
 ```
+
+JPEG quality is exposed through `ConvertOptions.quality` and clamped to `1..100`.
 
 ## 9. CLI Design
 
@@ -303,6 +311,19 @@ emf-to-png <input.emf> [output.(png|jpg)]
 emf-to-png <input.emf> -o <output.(png|jpg)>
 ```
 
+Common flags:
+
+```bash
+--width <px>
+--height <px>
+--dpi <n>
+--background <css>
+--format <png|jpeg>
+--quality <1-100>
+--fit <width|height|contain>
+--fallback
+```
+
 If an output path is provided, the CLI writes to a file via `convertFile()`.
 If no output is provided, it writes the image bytes to `stdout`:
 
@@ -318,6 +339,7 @@ EMF_PNG_HEIGHT
 EMF_PNG_DPI
 EMF_PNG_BG
 EMF_PNG_FORMAT
+EMF_PNG_QUALITY
 DEBUG
 ```
 
@@ -334,6 +356,7 @@ The main API is intentionally small:
 - `convertFile(inputPath, outputPath, options)`: reads an input file, writes the
   converted output, and returns the output path.
 - `emfOrWmfToSvg(kind, data, dpi)`: lower-level SVG conversion hook.
+- `inspect(input)`: returns format/support metadata without rendering.
 
 The options are defined in `src/types.ts`:
 
@@ -345,6 +368,8 @@ export interface ConvertOptions {
   dpi?: number;
   antialias?: boolean;
   format?: "png" | "jpeg";
+  quality?: number;
+  fit?: "width" | "height" | "contain";
   fallback?: boolean;
   logger?: (msg: string) => void;
 }
@@ -454,7 +479,9 @@ They verify:
 - `test1.emf` converts to a PNG buffer.
 - `test2.emf` converts to a PNG buffer.
 - invalid input throws `UnsupportedFormatError` by default.
-- invalid input can return a placeholder PNG with `fallback: true`.
+- invalid input can return a placeholder image with `fallback: true`.
+- fallback JPEG output has JPEG magic bytes.
+- WMF input throws `UnsupportedFeatureError`.
 
 PNG validation checks the PNG magic number:
 
@@ -499,16 +526,16 @@ Strict errors by default:
 
 ## 15. Rough Edges and Future Improvements
 
-- Add true WMF support or remove WMF from any user-facing CLI wording until it
-  exists.
-- Wire `isEmfPlus()` into conversion so EMF+ can produce clearer errors.
+- Add true WMF support if it can be made reliable.
+- Expand EMF+ diagnostics and decide whether EMF+ should be rejected earlier or
+  treated as partial classic-EMF rendering.
 - Explore enabling EMF+ handling in the `libemf2svg` wrapper if upstream support
   is good enough.
 - Add more real DOCX-extracted EMF fixtures.
 - Add visual regression tests or image snapshot tests instead of only PNG magic
   number checks.
-- Improve JPEG handling around transparent backgrounds; JPEG has no alpha, so a
-  default background may be desirable.
+- Add exact canvas sizing for `fit: "contain"` if users need padded output with
+  exact requested dimensions.
 - Replace or reduce generated build verbosity once the WASM build stabilizes.
 - Consider pinning the exact upstream `libemf2svg` commit instead of cloning the
   latest default branch.

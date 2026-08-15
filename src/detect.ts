@@ -1,5 +1,14 @@
 // naive but practical signatures for quick reject/accept
+import type { EmfRect } from "./types.js";
+
 export type VectorKind = "emf" | "wmf";
+
+export interface EmfHeaderInfo {
+  bounds: EmfRect;
+  frame: EmfRect;
+  records: number;
+  bytes: number;
+}
 
 export function sniffKind(buf: Uint8Array): VectorKind | null {
   // EMF: bytes 40..43 often contain ' EMF' (0x20 45 4D 46), but also check header size
@@ -73,4 +82,40 @@ export function isEmfPlus(buf: Uint8Array): boolean {
     off += nSize;
   }
   return false;
+}
+
+export function readEmfHeader(buf: Uint8Array): EmfHeaderInfo | null {
+  if (sniffKind(buf) !== "emf" || buf.length < 88) return null;
+
+  const view = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+  const bounds = rect(
+    view.getInt32(8, true),
+    view.getInt32(12, true),
+    view.getInt32(16, true),
+    view.getInt32(20, true)
+  );
+  const frame = rect(
+    view.getInt32(24, true),
+    view.getInt32(28, true),
+    view.getInt32(32, true),
+    view.getInt32(36, true)
+  );
+
+  return {
+    bounds,
+    frame,
+    records: view.getUint32(52, true),
+    bytes: view.getUint32(48, true),
+  };
+}
+
+function rect(left: number, top: number, right: number, bottom: number): EmfRect {
+  return {
+    left,
+    top,
+    right,
+    bottom,
+    width: Math.abs(right - left),
+    height: Math.abs(bottom - top),
+  };
 }

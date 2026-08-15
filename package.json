@@ -1,6 +1,6 @@
 {
   "name": "emf-to-png",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "WASM-based EMF to PNG/JPEG converter for Node.js. No Office, LibreOffice, or Inkscape required.",
   "license": "MIT",
   "type": "module",
@@ -21,6 +21,7 @@
     "dist/**/*",
     "bin/emf-to-png.mjs",
     "README.md",
+    "CHANGELOG.md",
     "LICENSE"
   ],
   "keywords": [
@@ -45,6 +46,7 @@
     "build:js": "tsup src/index.ts --format esm --dts --clean",
     "build": "npm run build:wasm && npm run build:js && node scripts/postbuild-copy-wasm.mjs",
     "test": "vitest run",
+    "prepack": "npm run build:js && node scripts/postbuild-copy-wasm.mjs",
     "prepublishOnly": "npm run clean && npm run build && npm test"
   },
   "dependencies": {

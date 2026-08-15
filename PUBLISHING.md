@@ -44,6 +44,7 @@ WebAssembly renderer under `dist/wasm`.
    Expected contents are roughly:
 
    ```text
+   CHANGELOG.md
    README.md
    bin/emf-to-png.mjs
    dist/index.d.ts
@@ -61,8 +62,8 @@ WebAssembly renderer under `dist/wasm`.
 
 5. Confirm `package.json` has the intended version.
 
-   For the first release, `0.1.0` is appropriate. If you want a more cautious
-   release, publish `0.1.0-beta.0` first.
+   For this reliability release, the intended version is `0.2.0`. If you want a
+   more cautious release, publish a prerelease such as `0.2.0-beta.0` first.
 
 ## Publishing
 
@@ -116,4 +117,3 @@ npx emf-to-png ./input.emf ./output.png
   support.
 - Conversion errors throw by default. Users can opt into placeholder output with
   `fallback: true`.
-

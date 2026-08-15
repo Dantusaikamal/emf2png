@@ -1,6 +1,11 @@
 import { access } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import type { VectorKind } from "./detect.js";
+import {
+  EmfParseError,
+  UnsupportedFeatureError,
+  WasmInitializationError,
+} from "./errors.js";
 
 type EmscriptenModule = {
   HEAPU8?: Uint8Array;
@@ -32,7 +37,7 @@ function getHeap(mod: EmscriptenModule): Uint8Array {
     mod.asm?.memory?.buffer ?? mod.wasmMemory?.buffer ?? mod.memory?.buffer;
   if (memBuf instanceof ArrayBuffer) return new Uint8Array(memBuf);
 
-  throw new Error("WASM heap view is not available");
+  throw new WasmInitializationError("WASM heap view is not available");
 }
 
 async function fileExists(url: URL): Promise<boolean> {
@@ -56,19 +61,27 @@ async function resolveWasmGlue(): Promise<URL> {
     }
   }
 
-  throw new Error(
+  throw new WasmInitializationError(
     "Could not find bundled emf2svg WASM files. Run `npm run build:wasm:emf` first."
   );
 }
 
 async function getModule(kind: VectorKind): Promise<EmscriptenModule> {
   if (kind !== "emf") {
-    throw new Error("WMF support is not built yet. Use EMF files for now.");
+    throw new UnsupportedFeatureError(
+      "wmf",
+      "WMF support is not built yet. Use EMF files for now."
+    );
   }
 
   if (!emfFactory) {
     const glueUrl = await resolveWasmGlue();
-    const glueMod = await import(glueUrl.href);
+    const glueMod = await import(glueUrl.href).catch((err) => {
+      throw new WasmInitializationError(
+        "Failed to import bundled emf2svg WASM glue.",
+        err
+      );
+    });
     const factory = glueMod.default as (opts?: any) => Promise<EmscriptenModule>;
 
     emfFactory = (opts) =>
@@ -82,7 +95,12 @@ async function getModule(kind: VectorKind): Promise<EmscriptenModule> {
       });
   }
 
-  return emfFactory({});
+  return emfFactory({}).catch((err) => {
+    throw new WasmInitializationError(
+      "Failed to initialize bundled emf2svg WASM module.",
+      err
+    );
+  });
 }
 
 async function runDirectExport(
@@ -109,7 +127,9 @@ async function runDirectExport(
       | undefined);
 
   if (!convertFn) {
-    throw new Error("Direct convert API is not exported by the WASM module");
+    throw new WasmInitializationError(
+      "Direct convert API is not exported by the WASM module"
+    );
   }
 
   const inPtr = mod._malloc(data.length + 1);
@@ -123,13 +143,15 @@ async function runDirectExport(
 
     const rc = convertFn(inPtr, data.length, dpi, outPtrPtr, outLenPtr);
     if (rc !== 0) {
-      throw new Error(`emf2svg convert returned ${rc}`);
+      throw new EmfParseError(`emf2svg convert returned ${rc}`);
     }
 
     const outPtr = mod.getValue(outPtrPtr, "i32") >>> 0;
     const outLen = mod.getValue(outLenPtr, "i32") >>> 0;
     if (!outPtr || !outLen) {
-      throw new Error(`emf2svg produced empty output (ptr=${outPtr}, len=${outLen})`);
+      throw new EmfParseError(
+        `emf2svg produced empty output (ptr=${outPtr}, len=${outLen})`
+      );
     }
 
     const svg = new TextDecoder("utf-8").decode(
