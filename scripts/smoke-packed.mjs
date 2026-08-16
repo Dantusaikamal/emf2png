@@ -57,6 +57,13 @@ if (Buffer.from(png).subarray(0, 8).toString("hex") !== "89504e470d0a1a0a") {
     cwd: tempDir,
     stdio: "inherit",
   });
+
+  execFileSync("npx", ["--no-install", "emf-to-png", "--help"], {
+    cwd: tempDir,
+    stdio: "inherit",
+    shell: process.platform === "win32",
+  });
+
   console.log(`Packed install smoke test passed for ${basename(tarballPath)}.`);
 } finally {
   await rm(tempDir, { recursive: true, force: true });

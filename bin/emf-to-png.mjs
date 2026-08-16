@@ -27,7 +27,7 @@ Flags:
 }
 
 if (args.length === 0 || args.includes("-h") || args.includes("--help")) {
-  help(args.length ? 1 : 0);
+  help(0);
 }
 
 const input = args[0];

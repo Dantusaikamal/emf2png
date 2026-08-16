@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.1
+
+- Fixed npm `bin` metadata normalization so `npx emf-to-png` works from the
+  published package.
+- Fixed CLI help flags to exit successfully.
+- Extended the packed tarball smoke test to execute the installed CLI.
+
 ## 0.2.0
 
 - Added `inspect()` for format detection, EMF+ detection, byte size, support
